@@ -81,7 +81,7 @@ local function getColorWithFallback(groups, attr, fallback)
   return fallback
 end
 
--- Get unique nvim instance ID from process ID
+-- Get unique nvim instance ID from process ID with tmp- prefix
 local cachedNvimId = nil
 
 local function getNvimId()
@@ -89,11 +89,41 @@ local function getNvimId()
     return cachedNvimId
   end
 
-  -- Use nvim's process ID - most reliable method
-  local id = tostring(vim.fn.getpid())
+  -- Use nvim's process ID with tmp- prefix
+  cachedNvimId = "tmp-" .. tostring(vim.fn.getpid())
+  return cachedNvimId
+end
 
-  cachedNvimId = id
-  return id
+-- Cleanup old tmp themes: remove oldest tmp-* files if more than 10 total themes exist
+local function cleanupOldTmpThemes()
+  local piThemesDir = vim.fn.expand("~/.pi/agent/themes")
+
+  -- Get all files in themes directory
+  local all_files = vim.fn.glob(piThemesDir .. "/*.json", false, true)
+  if #all_files <= 10 then
+    return -- No cleanup needed
+  end
+
+  -- Collect tmp-* files with their modification times
+  local tmp_files = {}
+  for _, filepath in ipairs(all_files) do
+    local filename = vim.fn.fnamemodify(filepath, ":t")
+    if filename:match("^tmp%-") then
+      local mtime = vim.fn.getftime(filepath)
+      table.insert(tmp_files, { path = filepath, mtime = mtime })
+    end
+  end
+
+  -- Sort by modification time (oldest first)
+  table.sort(tmp_files, function(a, b)
+    return a.mtime < b.mtime
+  end)
+
+  -- Remove oldest tmp files, keep only the 5 most recent
+  local to_remove = #tmp_files - 5
+  for i = 1, to_remove do
+    vim.fn.delete(tmp_files[i].path)
+  end
 end
 
 -- Export current colorscheme to pi theme
@@ -179,10 +209,13 @@ function M.exportPiTheme()
     bashMode = getColorWithFallback({ "String", "@string" }, "fg", "#b5bd68"),
   }
 
+  -- Get theme ID for naming
+  local theme_id = getNvimId()
+
   -- Build theme JSON
   local theme = {
     ["$schema"] = "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-    name = "nvim-sync",
+    name = theme_id, -- Name matches filename: tmp-<pid>
     colors = colors,
     export = {
       pageBg = getColorWithFallback({ "Normal" }, "bg", "#18181e"),
@@ -209,7 +242,6 @@ function M.exportPiTheme()
   if file then
     file:write(json)
     file:close()
-    vim.notify("Pi theme exported: " .. outputPath, vim.log.levels.INFO)
   else
     vim.notify("Failed to write pi theme to " .. outputPath, vim.log.levels.ERROR)
   end
@@ -236,7 +268,7 @@ vim.api.nvim_create_user_command("PiThemeExport", M.exportPiTheme, {
 -- Command to open pi in terminal with correct theme
 vim.api.nvim_create_user_command("Pi", function()
   local nvim_id = getNvimId()
-  local theme_name = nvim_id  -- Theme name matches PID (e.g., "85346")
+  local theme_name = nvim_id -- Theme name matches PID (e.g., "85346")
   local theme_path = vim.fn.expand("~/.pi/agent/themes/" .. nvim_id .. ".json")
   local settings_path = vim.fn.expand("~/.pi/agent/settings.json")
 
@@ -267,6 +299,9 @@ vim.api.nvim_create_user_command("Pi", function()
   -- Open terminal in right split with pi (skip default themes to avoid scanning all files)
   vim.cmd("botright vsplit | terminal pi --no-themes --theme " .. vim.fn.shellescape(theme_path))
   vim.cmd("startinsert")
+
+  -- Cleanup old tmp themes after pi is loaded (deferred to not block)
+  vim.defer_fn(cleanupOldTmpThemes, 1000)
 end, { desc = "Open pi in terminal with current nvim theme" })
 
 return M
