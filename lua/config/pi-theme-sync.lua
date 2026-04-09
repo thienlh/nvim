@@ -121,6 +121,9 @@ local function cleanupOldTmpThemes()
 
   -- Remove oldest tmp files, keep only the 5 most recent
   local to_remove = #tmp_files - 5
+  if to_remove <= 0 then
+    return
+  end
   for i = 1, to_remove do
     vim.fn.delete(tmp_files[i].path)
   end
@@ -233,10 +236,6 @@ function M.exportPiTheme()
   local outputPath = piThemesDir .. "/" .. getNvimId() .. ".json"
   -- vim.fn.mkdir(piThemesDir, "p") -- Ensure directory exists
   local json = vim.json.encode(theme)
-  -- Fix Lua's empty table encoding: vars must be an object {}, not array []
-  -- Since we don't use vars, the encoded JSON won't have it, which is fine
-  -- Pretty print JSON
-  json = json:gsub("([{,])", "%1\n  "):gsub("}", "\n}")
 
   local file = io.open(outputPath, "w")
   if file then
@@ -278,22 +277,30 @@ vim.api.nvim_create_user_command("Pi", function()
   end
 
   -- Update settings.json to use this theme (for hot reload to work)
-  local settings = {}
-  local file = io.open(settings_path, "r")
-  if file then
-    local content = file:read("*a")
-    file:close()
-    local ok, decoded = pcall(vim.json.decode, content)
-    if ok then
-      settings = decoded
+  do
+    local file = io.open(settings_path, "r")
+    if file then
+      local content = file:read("*a")
+      file:close()
+      local ok, decoded = pcall(vim.json.decode, content)
+      if not ok then
+        vim.notify("pi-theme-sync: could not parse settings.json, hot reload may not work", vim.log.levels.WARN)
+      else
+        decoded.theme = theme_name
+        local out = io.open(settings_path, "w")
+        if out then
+          out:write(vim.json.encode(decoded))
+          out:close()
+        end
+      end
+    else
+      -- File doesn't exist yet — create it
+      local out = io.open(settings_path, "w")
+      if out then
+        out:write(vim.json.encode({ theme = theme_name }))
+        out:close()
+      end
     end
-  end
-  settings.theme = theme_name
-  -- Write back
-  file = io.open(settings_path, "w")
-  if file then
-    file:write(vim.json.encode(settings))
-    file:close()
   end
 
   -- Open terminal in right split with pi (skip default themes to avoid scanning all files)
