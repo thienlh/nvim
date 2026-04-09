@@ -81,6 +81,21 @@ local function getColorWithFallback(groups, attr, fallback)
   return fallback
 end
 
+-- Get unique nvim instance ID from process ID
+local cachedNvimId = nil
+
+local function getNvimId()
+  if cachedNvimId then
+    return cachedNvimId
+  end
+
+  -- Use nvim's process ID - most reliable method
+  local id = tostring(vim.fn.getpid())
+
+  cachedNvimId = id
+  return id
+end
+
 -- Export current colorscheme to pi theme
 function M.exportPiTheme()
   -- Ensure pi config directory exists (pi looks in ~/.pi/agent/themes/)
@@ -180,9 +195,9 @@ function M.exportPiTheme()
   --[[ Change for cwd export - commented out:
   local themesDir = vim.fn.getcwd() .. "/.pi/themes"
   vim.fn.mkdir(themesDir, "p")
-  local outputPath = themesDir .. "/nvim-sync.json"
+  local outputPath = themesDir .. "/" .. getNvimId() .. ".json"
   --]]
-  local outputPath = piThemesDir .. "/nvim-sync.json"
+  local outputPath = piThemesDir .. "/" .. getNvimId() .. ".json"
   -- vim.fn.mkdir(piThemesDir, "p") -- Ensure directory exists
   local json = vim.json.encode(theme)
   -- Fix Lua's empty table encoding: vars must be an object {}, not array []
@@ -194,7 +209,7 @@ function M.exportPiTheme()
   if file then
     file:write(json)
     file:close()
-    -- vim.notify("Pi theme exported: " .. outputPath, vim.log.levels.INFO)
+    vim.notify("Pi theme exported: " .. outputPath, vim.log.levels.INFO)
   else
     vim.notify("Failed to write pi theme to " .. outputPath, vim.log.levels.ERROR)
   end
@@ -217,5 +232,41 @@ vim.defer_fn(M.exportPiTheme, 500)
 vim.api.nvim_create_user_command("PiThemeExport", M.exportPiTheme, {
   desc = "Export current nvim colorscheme to pi theme",
 })
+
+-- Command to open pi in terminal with correct theme
+vim.api.nvim_create_user_command("Pi", function()
+  local nvim_id = getNvimId()
+  local theme_name = nvim_id  -- Theme name matches PID (e.g., "85346")
+  local theme_path = vim.fn.expand("~/.pi/agent/themes/" .. nvim_id .. ".json")
+  local settings_path = vim.fn.expand("~/.pi/agent/settings.json")
+
+  -- Check if theme file exists, export if not
+  if vim.fn.filereadable(theme_path) == 0 then
+    M.exportPiTheme()
+  end
+
+  -- Update settings.json to use this theme (for hot reload to work)
+  local settings = {}
+  local file = io.open(settings_path, "r")
+  if file then
+    local content = file:read("*a")
+    file:close()
+    local ok, decoded = pcall(vim.json.decode, content)
+    if ok then
+      settings = decoded
+    end
+  end
+  settings.theme = theme_name
+  -- Write back
+  file = io.open(settings_path, "w")
+  if file then
+    file:write(vim.json.encode(settings))
+    file:close()
+  end
+
+  -- Open terminal in right split with pi (skip default themes to avoid scanning all files)
+  vim.cmd("botright vsplit | terminal pi --no-themes --theme " .. vim.fn.shellescape(theme_path))
+  vim.cmd("startinsert")
+end, { desc = "Open pi in terminal with current nvim theme" })
 
 return M
